@@ -31,18 +31,7 @@ library Errors {
   string public constant EMPTY_WINNER = 'EMPTY_WINNER';
   string public constant AUCTION_ALREADY_STARTED = 'AUCTION_ALREADY_STARTED';
   string public constant AUCTION_NOT_EXISTS = 'AUCTION_NOT_EXISTS';
-  string public constant NFT_CONTRACT_IS_NOT_ALLOWED = 'NFT_CONTRACT_IS_NOT_ALLOWED';
   string public constant ZERO_ADDRESS = 'ZERO_ADDRESS';
-}
-
-/**
- * @dev Interface of extension of the ERC721 standard to allow `tokenAuthor` method.
- */
-interface IERC721TokenAuthor {
-    /**
-     * @dev Returns the amount of tokens in existence.
-     */
-    function tokenAuthor(uint256 tokenId) external view returns(address);
 }
 
 
@@ -58,9 +47,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
     uint256 constant MIN_MIN_PRICE_STEP_NUMERATOR = 1;  // 0.01%
     uint256 constant MAX_MIN_PRICE_STEP_NUMERATOR = 10000;  // 100%
 
-    uint256 public authorRoyaltyNumerator;
-    uint256 constant AUTHOR_ROYALTY_DENOMINATOR = 10000;
-
     uint40 public overtimeWindow;
     uint40 public auctionDuration;
     uint40 constant MAX_OVERTIME_WINDOW = 365 days;
@@ -68,7 +54,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
     uint40 constant MAX_AUCTION_DURATION = 365 days;
     uint40 constant MIN_AUCTION_DURATION = 1 minutes;
     IERC20 public payableToken;
-    IERC721 public allowedNFT;
 
     /**
      * @notice Emitted when a new auction is created.
@@ -83,21 +68,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
         uint256 indexed nftId,
         address indexed auctioneer,
         uint256 startPrice
-    );
-
-    /**
-     * @notice Emitted when a royalty paid to an author.
-     *
-     * @param nft The NFT address of the token to auction.
-     * @param nftId The NFT ID of the token to auction.
-     * @param author The author.
-     * @param amount The royalty amount.
-     */
-    event RoyaltyPaid(
-        address indexed nft,
-        uint256 indexed nftId,
-        address indexed author,
-        uint256 amount
     );
 
     /**
@@ -138,15 +108,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
      */
     event OvertimeWindowSet(
         uint40 overtimeWindow
-    );
-
-    /**
-     * @notice Emitted when a new auction params are set.
-     *
-     * @param authorRoyaltyNumerator.
-     */
-    event AuthorRoyaltyNumeratorSet(
-        uint256 authorRoyaltyNumerator
     );
 
     /**
@@ -208,16 +169,13 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
      * @param _auctionDuration The minimum auction duration.  (e.g. 24*3600)
      * @param _minStepNumerator The minimum auction price step. (e.g. 500 ~ 5% see `MINIMUM_STEP_DENOMINATOR`)
      * @param _payableToken The address of payable token.
-     * @param _allowedNFT For now, the only one NFT is allowed.
      * @param _adminAddress The administrator address to set, allows pausing and editing settings.
      */
     function initialize(
         uint40 _overtimeWindow,
         uint40 _auctionDuration,
         uint256 _minStepNumerator,
-        uint256 _authorRoyaltyNumerator,
         address _payableToken,
-        address _allowedNFT,
         address _adminAddress
     ) external initializer {
         require(
@@ -228,17 +186,11 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
             _payableToken != address(0),
             Errors.ZERO_ADDRESS
         );
-        require(
-            _allowedNFT != address(0),
-            Errors.ZERO_ADDRESS
-        );
         _admin = _adminAddress;
         payableToken = IERC20(_payableToken);
-        allowedNFT = IERC721(_allowedNFT);
         setAuctionDuration(_auctionDuration);
         setOvertimeWindow(_overtimeWindow);
         setMinPriceStepNumerator(_minStepNumerator);
-        setAuthorRoyaltyNumerator(_authorRoyaltyNumerator);
     }
 
     /**
@@ -279,17 +231,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
     }
 
     /**
-     * @dev Admin function to set author royalty numerator.
-     *
-     * @param newAuthorRoyaltyNumerator The new overtime window to set.
-     */
-    function setAuthorRoyaltyNumerator(uint256 newAuthorRoyaltyNumerator) public onlyAdmin {
-        require(newAuthorRoyaltyNumerator <= AUTHOR_ROYALTY_DENOMINATOR, Errors.INVALID_AUCTION_PARAMS);
-        authorRoyaltyNumerator = newAuthorRoyaltyNumerator;
-        emit AuthorRoyaltyNumeratorSet(newAuthorRoyaltyNumerator);
-    }
-
-    /**
      * @dev Create new auction.
      *
      * @param nft Address of ERC721 NFT contract.
@@ -301,7 +242,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
         uint256 nftId,
         uint256 startPrice
     ) external nonReentrant whenNotPaused {
-        require(nft == address(allowedNFT), Errors.NFT_CONTRACT_IS_NOT_ALLOWED);
         require(nftAuction2nftID2auction[nft][nftId].auctioneer == address(0), Errors.AUCTION_EXISTS);
         require(
             startPrice > 0,
@@ -316,10 +256,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
         nftAuction2nftID2auction[nft][nftId] = auctionData;
         IERC721(nft).transferFrom(msg.sender, address(this), nftId);  // maybe use safeTransferFrom
         emit AuctionCreated(nft, nftId, msg.sender, startPrice);
-    }
-
-    function stub() external pure returns(bytes4) {
-        return type(IERC721TokenAuthor).interfaceId;
     }
 
     /**
@@ -341,27 +277,6 @@ contract Auction is AdminPausableUpgradeSafe, ReentrancyGuard, Initializable {
 
         delete nftAuction2nftID2auction[nft][nftId];
         emit WonNftClaimed(nft, nftId, winner, msg.sender);
-
-        // the only one NFT we allow always supports this
-//        if (IERC165(nft).supportsInterface(type(IERC721TokenAuthor).interfaceId)) {  // danger: external calls
-//            address author = IERC721TokenAuthor(nft).tokenAuthor(nftId);
-//            if (author != address(0) && author != auctioneer) {
-//                uint256 payToAuthor = payToAuctioneer * authorRoyaltyNumerator / AUTHOR_ROYALTY_DENOMINATOR;
-//                payToAuctioneer -= payToAuthor;
-//                emit RoyaltyPaid(nft, nftId, author, payToAuthor);
-//                payableToken.safeTransfer(author, payToAuthor);
-//            }
-//        }
-
-        // warning will not work for usual erc721
-        address author = IERC721TokenAuthor(nft).tokenAuthor(nftId);
-//        if (author != address(0) && author != auctioneer) {
-        if (author != auctioneer) {
-            uint256 payToAuthor = payToAuctioneer * authorRoyaltyNumerator / AUTHOR_ROYALTY_DENOMINATOR;
-            payToAuctioneer -= payToAuthor;
-            emit RoyaltyPaid(nft, nftId, author, payToAuthor);
-            payableToken.safeTransfer(author, payToAuthor);
-        }
 
         payableToken.safeTransfer(auctioneer, payToAuctioneer);
         IERC721(nft).transferFrom(address(this), winner, nftId);  // maybe use safeTransfer (I don't want unclear onERC721Received stuff)
