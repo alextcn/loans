@@ -33,7 +33,7 @@ struct Loan {
     address creator;
     EnumerableSet.AddressSet lenders;
     mapping(address /*lender*/ => uint256 /**/) lenderLoans;
-    uint256 annualRateNumerator;
+    uint256 rateNumerator;
     uint256 amount;
     uint256 overpayment;
     uint40 loanStartTimstamp;
@@ -55,7 +55,7 @@ contract Loans {
         address indexed nftHub,
         uint256 indexed nftId,
         uint256 loanAmount,
-        uint256 loanAnnualRateNumerator,
+        uint256 loanrateNumerator,
         uint40 maxPeriod
     );
 
@@ -98,7 +98,7 @@ contract Loans {
     event LoanReturned(
         uint256 indexed,
         uint256 loanPeriod,
-        uint256 overpayment  // = loanPeriod * loanAmount * loanAnnualRateNumerator / 365 days / LOAN_ANNUAL_RATE_DENOMINATOR
+        uint256 overpayment  // = loanPeriod * loanAmount * loanrateNumerator / 365 days / LOAN_ANNUAL_RATE_DENOMINATOR
     );
 
     /* реестр всех займов */
@@ -111,7 +111,7 @@ contract Loans {
     /* получить инфу по займу (до выдачи / после выдачи / отмененному / ликвидированному итп) */
     function getLoan(uint256 loanId) external view returns(
         address creator,
-        uint256 annualRateNumerator,
+        uint256 rateNumerator,
         uint256 amount,
         uint256 overpayment,
         uint40 loanStartTimstamp,
@@ -151,7 +151,7 @@ contract Loans {
         IERC721 nftHub, 
         uint256 nftId, 
         uint256 amount,
-        uint256 annualRateNumerator,
+        uint256 rateNumerator,
         uint40 maxPeriod
     ) external {
         // TODO: implement
@@ -182,7 +182,6 @@ contract Loans {
     }
 
     /* вернуть займ (с процентами) */
-    /* todo: think что если транзакция будет исполнена значительно позже? нужен ли аргумент maxOverpayment? */
     function returnLoan(uint256 loanId) external {
         // TODO: implement
     }
@@ -194,7 +193,7 @@ contract Loans {
         // TODO: implement
     }
 
-    // если заемщик долго не возвращает залог, то любой лендер имеет право вызвать этот метод и выставить залог на аукцион
+    // если заемщик долго не возвращает займ, то любой лендер имеет право вызвать этот метод и выставить залог на аукцион
     function liquidateCollateral(uint256 loanId) public {
         // TODO: implement
     }
