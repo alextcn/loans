@@ -8,24 +8,6 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {Auction} from './Auction.sol';
 
 
-// interface для Ломбарда
-// eng. PawnShop не очень известно, слова Lombarter не существует, поэтому использую Loans
-
-/*
-    ставка по займу кем выдается?
-
-    она фикисрованная на займ, типа взял 100 отдал 110
-    или она задана на время, типа 10%/year и в зависимости от того когда отдашь нужно будет добавить X * time * 110% / 365 days
-
-    было бы логично чтобы ставка по займу была не фиксирована а разная
-    например для рискованных НФТ она должна быть выше
-    а для НФТ на недвижимость ниже
-
-    поэтому я пока loanRate сделаю частью самого Loan structure
-
-    можно ввести минимальный процент overpayment (e.g. 1%) который будет обязан покрыть заемщик даже если захочет вернуть деньги в ту же минуту
-*/
-
 // todo: обсудить возможность авто-отмены LoanProposalParticipationAccepted после какого-то времени (но тут все равно lender должен дернуть метод) так просто не получится
 // todo: обсудить как будет задаваться minBid для аукциона для истекших займов, у Дмитрия было предложение = 10% * amount, проблема тут в том а что если цены нфт упадет в 100 раз? тогда нфт никто никогда не купит за 0.1 первоначальной цены. Должен быть механизм.
 
@@ -38,9 +20,9 @@ struct Loan {
     mapping(address /*lender*/ => uint256 /**/) lenderLoans;
     uint256 rateNumerator;
     uint256 amount;
-    uint40 loanStartTimstamp;
-    uint40 loanFinishTimstamp;
-    uint40 maxPeriod;
+    uint40 startTimestamp;
+    uint40 finishTimstamp;
+    uint40 maxPeriod; // time in seconds given to creator to return amount with percent to lenders
 }
 
 
@@ -59,7 +41,7 @@ contract Loans {
         address indexed nft,
         uint256 indexed nftId,
         uint256 loanAmount,
-        uint256 loanrateNumerator,
+        uint256 rateNumerator,
         uint40 maxPeriod
     );
 
@@ -100,9 +82,8 @@ contract Loans {
 
     /* creator вернул займ с процентами */ 
     event LoanReturned(
-        uint256 indexed,
-        uint256 loanPeriod
-        // uint256 overpayment  // = loanPeriod * loanAmount * loanrateNumerator / 365 days / LOAN_ANNUAL_RATE_DENOMINATOR
+        uint256 indexed loanId,
+        uint256 returnAmount
     );
 
     /* реестр всех займов */
@@ -117,8 +98,8 @@ contract Loans {
         address creator,
         uint256 rateNumerator,
         uint256 amount,
-        uint40 loanStartTimstamp,
-        uint40 loanFinishTimstamp,
+        uint40 startTimestamp,
+        uint40 finishTimstamp,
         uint40 maxPeriod
     ) {
         // Loan storage loan = _loans[loanId];
@@ -169,8 +150,8 @@ contract Loans {
         loan.nftId = nftId;
         loan.rateNumerator = rateNumerator;
         loan.amount = amount;
-        loan.loanStartTimstamp = 0;
-        loan.loanFinishTimstamp = 0;
+        loan.startTimestamp = 0;
+        loan.finishTimstamp = 0;
         loan.maxPeriod;
                 
         IERC721(nft).transferFrom(msg.sender, address(this), nftId); // TODO: use safeTransferFrom?
@@ -185,7 +166,7 @@ contract Loans {
     function cancelLoanProposal(uint256 loanId) external {
         require(_loans[loanId].creator != address(0), "LOAN_NOT_EXISTS");
         require(_loans[loanId].creator == msg.sender, "NO_RIGHTS");
-        require(_loans[loanId].loanStartTimstamp == 0, "LOAN_STARTED");
+        require(_loans[loanId].startTimestamp == 0, "LOAN_STARTED");
 
         Loan storage loan = _loans[loanId];
         EnumerableSet.AddressSet storage lenders = _loans[loanId].lenders;
@@ -210,7 +191,7 @@ contract Loans {
     function acceptProposalParticipation(uint256 loanId, uint256 amountToGive) external {
         require(amountToGive > 0, "ZERO_AMOUNT");
         require(_loans[loanId].creator != address(0), "LOAN_NOT_EXISTS");
-        require(_loans[loanId].loanStartTimstamp == 0, "LOAN_STARTED");
+        require(_loans[loanId].startTimestamp == 0, "LOAN_STARTED");
     
         // TODO: is storage correct here? loan's properties are changed later
         Loan storage loan = _loans[loanId];
@@ -229,7 +210,7 @@ contract Loans {
         emit LoanProposalParticipationAccepted(loanId, msg.sender, acceptedAmount);
         
         if (loanedAmount + acceptedAmount == loanAmount) {
-            loan.loanStartTimstamp = uint40(block.timestamp); // TODO: is this type conversion safe?
+            loan.startTimestamp = uint40(block.timestamp); // TODO: is this type conversion safe?
             emit LoanGiven(loanId);
         }
     }
@@ -241,7 +222,7 @@ contract Loans {
     function changeProposalParticipation(uint256 loanId, uint256 amountToGive) external {
         require(amountToGive > 0, "ZERO_AMOUNT");
         require(_loans[loanId].creator != address(0), "LOAN_NOT_EXISTS");
-        require(_loans[loanId].loanStartTimstamp == 0, "LOAN_STARTED");
+        require(_loans[loanId].startTimestamp == 0, "LOAN_STARTED");
 
         Loan storage loan = _loans[loanId];
         uint256 lenderAmount = loan.lenderLoans[msg.sender];
@@ -263,9 +244,9 @@ contract Loans {
             payableToken.safeTransfer(msg.sender, transferAmount);
         }
         emit LoanProposalParticipationChanged(loanId, msg.sender, newLenderAmount);
-        
+
         if (loanedAmount - lenderAmount + newLenderAmount == loanAmount) {
-            loan.loanStartTimstamp = uint40(block.timestamp); // TODO: is this type conversion safe?
+            loan.startTimestamp = uint40(block.timestamp); // TODO: is this type conversion safe?
             emit LoanGiven(loanId);
         }
     }
@@ -274,7 +255,7 @@ contract Loans {
     /* возвращает деньги lender по неначатому или отмененному proposal */
     function cancelProposalParticipation(uint256 loanId) external {
         require(_loans[loanId].creator != address(0), "LOAN_NOT_EXISTS");
-        require(_loans[loanId].loanStartTimstamp == 0, "LOAN_STARTED");
+        require(_loans[loanId].startTimestamp == 0, "LOAN_STARTED");
 
         Loan storage loan = _loans[loanId];
         uint256 lenderAmount = loan.lenderLoans[msg.sender];
@@ -289,13 +270,34 @@ contract Loans {
 
     /* вернуть займ (с процентами) */
     function returnLoan(uint256 loanId) external {
-        // TODO: implement
+        Loan storage loan = _loans[loanId];
+        require(loan.creator != address(0), "LOAN_NOT_EXISTS");
+        require(loan.creator == msg.sender, "NOT_CREATOR");
+        require(loan.startTimestamp != 0, "LOAN_NOT_STARTED");
+        require(loan.finishTimstamp == 0, "LOAN_FINISHED");
+        require(block.timestamp < loan.startTimestamp + loan.maxPeriod, "LOAN_HAS_EXPIRED");
+
+        uint256 loanAmount = loan.amount;
+        uint256 rateNumerator = loan.rateNumerator;
+        
+        // TODO: optimize calc?
+        // TODO: use safemath?
+        uint256 returnAmount = loanAmount + loanAmount * rateNumerator / LOAN_ANNUAL_RATE_DENOMINATOR;
+        payableToken.safeTransferFrom(msg.sender, address(this), returnAmount);
+        IERC721(loan.nft).safeTransferFrom(address(this), msg.sender, loan.nftId);
+        
+        loan.finishTimstamp = uint40(block.timestamp);
+        emit LoanReturned(loanId, returnAmount);
+        
+        // TODO: delete loan structure? then lenders can't claim their shares
+        // TODO: leave loan? then creator can't create a loan for same NFT
+        // TODO: solution: update loan id with timestamp (then check all methods)
     }
 
     //   конечно удобнее всего было бы заставить creator платить газ за то чтобы послать каждом lender его кусок токенов
     //   но это анти-паттерн и это много газа поэтому мы делаем метод чтобы лендер мог вывести свой кусок
     //  забрать свою долю токенов по возвращенному (либо ликвидированному) займу вместе с overpayment
-    function withdrawReturnedProposalShare(uint256 loanId) external {
+    function claimProposalShare(uint256 loanId) external {
         // TODO: implement
     }
 
