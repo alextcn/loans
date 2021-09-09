@@ -107,16 +107,22 @@ contract Loans {
         return (address(0), 0, 0, 0, 0, 0);
     }
 
+    
     /* список всех заемщиков */
-    function getLoanLenders(uint256 loanId) external view returns(address[] memory lenders) {
-        // TODO: implement
+    function getLoanLenders(uint256 loanId) external view returns(address[] memory) {
+        // TODO: require loan id?
+        // TODO: is there a method to convert EnumerableSet to array?
+        EnumerableSet.AddressSet storage lendersMap = _loans[loanId].lenders;
+        address[] memory lenders = new address[](lendersMap.length());
+        for (uint256 i = 0; i < lendersMap.length(); i++) {
+            lenders[i] = lendersMap.at(i);
+        }
         return lenders;
     }
 
     /* кол-во займа от заемщика */
-    function getLoanLenderLoan(uint256 loanId, address lender) external view returns(uint256) {
-        // TODO: implement
-        return 0;
+    function getLoanLenderAmount(uint256 loanId, address lender) external view returns(uint256) {
+        return _loans[loanId].lenderLoans[lender];
     }
 
     constructor(
