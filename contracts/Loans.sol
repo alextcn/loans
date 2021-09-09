@@ -21,7 +21,7 @@ struct Loan {
     uint256 rateNumerator;
     uint256 amount;
     uint40 startTimestamp;
-    uint40 finishTimstamp;
+    uint40 finishTimestamp;
     uint40 maxPeriod; // time in seconds given to creator to return amount with percent to lenders
 }
 
@@ -96,15 +96,17 @@ contract Loans {
     /* получить инфу по займу (до выдачи / после выдачи / отмененному / ликвидированному итп) */
     function getLoan(uint256 loanId) external view returns(
         address creator,
+        address nft,
+        uint256 nftId,
         uint256 rateNumerator,
         uint256 amount,
         uint40 startTimestamp,
-        uint40 finishTimstamp,
+        uint40 finishTimestamp,
         uint40 maxPeriod
     ) {
-        // Loan storage loan = _loans[loanId];
-        // TODO: implement
-        return (address(0), 0, 0, 0, 0, 0);
+        Loan storage loan = _loans[loanId];
+        return (loan.creator, loan.nft, loan.nftId, loan.rateNumerator, loan.amount, 
+            loan.startTimestamp, loan.finishTimestamp, loan.maxPeriod);
     }
 
     
@@ -157,7 +159,7 @@ contract Loans {
         loan.rateNumerator = rateNumerator;
         loan.amount = amount;
         loan.startTimestamp = 0;
-        loan.finishTimstamp = 0;
+        loan.finishTimestamp = 0;
         loan.maxPeriod;
                 
         IERC721(nft).transferFrom(msg.sender, address(this), nftId); // TODO: use safeTransferFrom?
@@ -280,7 +282,7 @@ contract Loans {
         require(loan.creator != address(0), "LOAN_NOT_EXISTS");
         require(loan.creator == msg.sender, "NOT_CREATOR");
         require(loan.startTimestamp != 0, "LOAN_NOT_STARTED");
-        require(loan.finishTimstamp == 0, "LOAN_FINISHED");
+        require(loan.finishTimestamp == 0, "LOAN_FINISHED");
         require(block.timestamp < loan.startTimestamp + loan.maxPeriod, "LOAN_HAS_EXPIRED");
 
         uint256 loanAmount = loan.amount;
@@ -288,11 +290,11 @@ contract Loans {
         
         // TODO: optimize calc?
         // TODO: use safemath?
-        uint256 returnAmount = loanAmount + loanAmount * rateNumerator / LOAN_ANNUAL_RATE_DENOMINATOR;
+        uint256 returnAmount = loanAmount + _calcInterest(loanAmount, rateNumerator);
         payableToken.safeTransferFrom(msg.sender, address(this), returnAmount);
         IERC721(loan.nft).safeTransferFrom(address(this), msg.sender, loan.nftId);
         
-        loan.finishTimstamp = uint40(block.timestamp);
+        loan.finishTimestamp = uint40(block.timestamp);
         emit LoanReturned(loanId, returnAmount);
         
         // TODO: delete loan structure? then lenders can't claim their shares
@@ -317,6 +319,10 @@ contract Loans {
         // TODO: implement
     }
 
+    // TODO: use safemath?
+    function _calcInterest(uint256 amount, uint256 rateNumerator) private pure returns(uint256 share) {
+        return amount * rateNumerator / LOAN_ANNUAL_RATE_DENOMINATOR;
+    }
 
     // TODO: replace by property Loan.currentAmount?
     // TODO: add memory/storage to loan argument?
