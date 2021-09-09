@@ -32,6 +32,7 @@ contract Loans {
 
     /* знаменатель дроби для ставки */
     uint256 constant public LOAN_ANNUAL_RATE_DENOMINATOR = 10000;
+    // TODO: add minimum loan period?
 
 
     /* предложение дать займ под залог создано */ 
@@ -75,6 +76,8 @@ contract Loans {
         uint256 indexed loanId
     );
 
+    // TODO: add claim? now tokens sent automatically to creator
+    // when last lender put filled required loan amount
     /* creator забрал свой займ */
     event GivenLoanWithdrawn(
         uint256 indexed loanId
@@ -83,7 +86,14 @@ contract Loans {
     /* creator вернул займ с процентами */ 
     event LoanReturned(
         uint256 indexed loanId,
-        uint256 returnAmount
+        uint256 amount
+    );
+
+    /* Lender claimed his amount with interest on returned loan. */
+    event ShareClaimed(
+        uint256 indexed loanId,
+        address indexed lender,
+        uint256 amount
     );
 
     /* реестр всех займов */
@@ -177,17 +187,16 @@ contract Loans {
         require(_loans[loanId].startTimestamp == 0, "LOAN_STARTED");
 
         Loan storage loan = _loans[loanId];
-        EnumerableSet.AddressSet storage lenders = _loans[loanId].lenders;
-        mapping(address => uint256) storage lenderLoans = _loans[loanId].lenderLoans;
-
         // TODO: make lenders claim their loans back for cancelled proposals?
         // TODO: should we store cancelled proposals for the future?
-        for (uint256 i = 0; i < lenders.length(); i++) {
-            address lender = lenders.at(i);
-            uint256 lenderLoan = lenderLoans[lender];
+        for (uint256 i = 0; i < loan.lenders.length(); i++) {
+            address lender = loan.lenders.at(i);
+            uint256 lenderLoan = loan.lenderLoans[lender];
             if (lenderLoan > 0) {
                 payableToken.safeTransfer(lender, lenderLoan);
             }
+            // loan.lenders.remove(lender);
+            // delete loan.lenderLoans[lender];
         }
         delete _loans[loanId];
 
@@ -259,7 +268,7 @@ contract Loans {
         }
     }
 
-    // TODO: also support cancelled contracts (when cancelLoanProposal updated and transfer loop is removed)
+    // TODO: also support cancelled loans (when cancelLoanProposal updated and transfer loop is removed)
     /* возвращает деньги lender по неначатому или отмененному proposal */
     function cancelProposalParticipation(uint256 loanId) external {
         require(_loans[loanId].creator != address(0), "LOAN_NOT_EXISTS");
@@ -288,9 +297,7 @@ contract Loans {
         uint256 loanAmount = loan.amount;
         uint256 rateNumerator = loan.rateNumerator;
         
-        // TODO: optimize calc?
-        // TODO: use safemath?
-        uint256 returnAmount = loanAmount + _calcInterest(loanAmount, rateNumerator);
+        uint256 returnAmount = _calcAmountWithInterest(loanAmount, rateNumerator);
         payableToken.safeTransferFrom(msg.sender, address(this), returnAmount);
         IERC721(loan.nft).safeTransferFrom(address(this), msg.sender, loan.nftId);
         
@@ -304,9 +311,26 @@ contract Loans {
 
     //   конечно удобнее всего было бы заставить creator платить газ за то чтобы послать каждом lender его кусок токенов
     //   но это анти-паттерн и это много газа поэтому мы делаем метод чтобы лендер мог вывести свой кусок
-    //  забрать свою долю токенов по возвращенному (либо ликвидированному) займу вместе с overpayment
+    //  забрать свою долю токенов по возвращенному или ликвидированному займу вместе с interest
+    // TODO: support to claim liquidated loan
+    // TODO: support to claim cancelled loan
     function claimProposalShare(uint256 loanId) external {
-        // TODO: implement
+        Loan storage loan = _loans[loanId];
+        require(loan.creator != address(0), "LOAN_NOT_EXISTS");
+        require(loan.finishTimestamp != 0, "LOAN_NOT_FINISHED");
+        // TODO: check not claimed yet
+
+        uint256 lenderAmount = loan.lenderLoans[msg.sender];
+        require(loan.lenders.contains(msg.sender) && lenderAmount > 0, "NOT_PARTICIPATING");
+
+        uint256 returnAmount = _calcAmountWithInterest(lenderAmount, loan.rateNumerator);
+        payableToken.safeTransfer(msg.sender, returnAmount);
+
+        loan.lenders.remove(msg.sender);
+        delete loan.lenderLoans[msg.sender];
+        emit ShareClaimed(loanId, msg.sender, returnAmount);
+        
+        // TODO: delete loan if last lender took his share?
     }
 
     // если заемщик долго не возвращает займ, то любой лендер имеет право вызвать этот метод и выставить залог на аукцион
@@ -319,16 +343,19 @@ contract Loans {
         // TODO: implement
     }
 
+
     // TODO: use safemath?
-    function _calcInterest(uint256 amount, uint256 rateNumerator) private pure returns(uint256 share) {
-        return amount * rateNumerator / LOAN_ANNUAL_RATE_DENOMINATOR;
+    function _calcAmountWithInterest(uint256 amount, uint256 rateNumerator) private pure returns(uint256 share) {
+        return amount + amount * rateNumerator / LOAN_ANNUAL_RATE_DENOMINATOR;
     }
 
     // TODO: replace by property Loan.currentAmount?
     // TODO: add memory/storage to loan argument?
     // TODO: write tests
     /**
-     * @dev Calculates current loan amount.
+     * @dev Calculates total amount lenders provived for a loan.
+     * 
+     * If loan is finished, result doesn't include amounts of lenders who claimed their shares.
      */
     function _getCurrentLoanAmount(Loan storage loan) private view returns(uint256 currentAmount) {
         EnumerableSet.AddressSet storage lenders = loan.lenders;
