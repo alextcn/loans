@@ -11,7 +11,7 @@ import {Auction} from './Auction.sol';
 // todo: обсудить возможность авто-отмены LoanProposalParticipationAccepted после какого-то времени (но тут все равно lender должен дернуть метод) так просто не получится
 // todo: обсудить как будет задаваться minBid для аукциона для истекших займов, у Дмитрия было предложение = 10% * amount, проблема тут в том а что если цены нфт упадет в 100 раз? тогда нфт никто никогда не купит за 0.1 первоначальной цены. Должен быть механизм.
 
-enum LoanStatus { Proposed, Started, Claimed, Cancelled, Liquidating, Liquidated, Returned }
+enum LoanStatus { Proposed, Cancelled, Started, Liquidating, Liquidated, Returned }
 
 struct Loan {
     address creator;
@@ -22,7 +22,7 @@ struct Loan {
     EnumerableSet.AddressSet lenders;
     mapping(address /*lender*/ => uint256 /*loan*/) lenderLoans;
     uint32 rateNumerator;
-    uint40 startTimestamp;  // time when loan collected required amount from lenders
+    uint40 startTimestamp;  // time when loan's author claimed loan amount provided by lenders
     uint40 finishTimestamp; // time when loan is either cancelled, liquidated, or returned
     uint40 maxPeriod; // time in seconds given to creator to return a loan with interest
 }
@@ -65,13 +65,8 @@ contract Loans {
         address indexed lender
     );
 
-    /** @notice A loan's status updated from Proposed to Started. */
-    event LoanStarted(
-        uint256 indexed loanId
-    );
-
     /** @notice Loan's author claimed tokens loaned by lenders. */
-    event LoanClaimed(
+    event LoanStarted(
         uint256 indexed loanId
     );
 
@@ -213,7 +208,7 @@ contract Loans {
      * @notice Provide tokens for proposed loan.
      *
      * Loan should be in Proposed status.
-     * When amount fills loan amount, a loan starts (so loan author can claim borrowed tokens).
+     * When amount fills loan amount, an author can claim loaned tokens by calling claimStartedLoanTokens.
      * Amount can't be 0 and can't exceed total loan's amount.
      * Can be called multiple times to update lending amount of tokens.
      */
@@ -225,13 +220,11 @@ contract Loans {
         uint256 maxLoanAmount = loan.amount;
         uint256 totalLoanedAmount = _getCurrentLoanAmount(loan);
         
-        bool loanStarted;
         if (!loan.lenders.contains(msg.sender)) {
             // add new lender's loan
             require(totalLoanedAmount + amount <= maxLoanAmount, "EXCEEDS_LOAN_AMOUNT");
             loan.lenders.add(msg.sender);
             loan.lenderLoans[msg.sender] = amount;
-            loanStarted = totalLoanedAmount + amount == maxLoanAmount;
             payableToken.safeTransferFrom(msg.sender, address(this), amount);
             emit LoanParticipationUpdated(loanId, msg.sender, amount);
         } else {
@@ -239,7 +232,6 @@ contract Loans {
             uint256 oldAmount = loan.lenderLoans[msg.sender];
             require(oldAmount != amount, "SAME_AMOUNT");
             require(totalLoanedAmount - oldAmount + amount <= maxLoanAmount, "EXCEEDS_LOAN_AMOUNT");
-            loanStarted = totalLoanedAmount - oldAmount + amount == maxLoanAmount;
             loan.lenderLoans[msg.sender] = amount;
             if (amount > oldAmount) {
                 payableToken.safeTransferFrom(msg.sender, address(this), amount - oldAmount);
@@ -248,12 +240,6 @@ contract Loans {
                 payableToken.safeTransfer(msg.sender, oldAmount - amount);
                 emit LoanParticipationUpdated(loanId, msg.sender, oldAmount - amount);
             }
-        }
-        // start a loan
-        if (loanStarted) {
-            loan.status = LoanStatus.Started;
-            loan.startTimestamp = uint40(block.timestamp);
-            emit LoanStarted(loanId);
         }
     }
 
@@ -276,20 +262,25 @@ contract Loans {
         emit LoanParticipationCanceled(loanId, msg.sender);
     }
 
-    /** @notice Claim tokens of started loan by loan's author. */
-    function claimStartedLoanTokens(uint256 loanId) loanExists(loanId) onlyAuthor(loanId) external {
+    /** @notice Claim tokens of proposed loan by loan's author. Starts a loan. */
+    function claimLoanedTokens(uint256 loanId) loanExists(loanId) onlyAuthor(loanId) external {
         Loan storage loan = _loans[loanId];
-        require(loan.status == LoanStatus.Started, "ILLEGAL_LOAN_STATUS");
-        // require(block.timestamp < loan.startTimestamp + loan.maxPeriod, "LOAN_PERIOD_EXPIRED"); // TODO: requires to support more logic
-        loan.status = LoanStatus.Claimed;
-        payableToken.safeTransfer(msg.sender, loan.amount);
-        emit LoanClaimed(loanId);
+        require(loan.status == LoanStatus.Proposed, "ILLEGAL_LOAN_STATUS");
+
+        uint256 loanAmount = loan.amount;
+        uint256 totalLoanedAmount = _getCurrentLoanAmount(loan);
+        require(loanAmount == totalLoanedAmount, "NOT_ENOUGH_LOANED");
+
+        loan.status = LoanStatus.Started;
+        loan.startTimestamp = uint40(block.timestamp);
+        payableToken.safeTransfer(msg.sender, loanAmount);
+        emit LoanStarted(loanId);
     }
 
     /** @notice Return loaned tokens with interest and get NFT collateral back. */
     function returnLoan(uint256 loanId) loanExists(loanId) onlyAuthor(loanId) external {
         Loan storage loan = _loans[loanId];
-        require(loan.status == LoanStatus.Claimed, "ILLEGAL_LOAN_STATUS");
+        require(loan.status == LoanStatus.Started, "ILLEGAL_LOAN_STATUS");
 
         loan.status = LoanStatus.Returned;
         loan.finishTimestamp = uint40(block.timestamp);
@@ -323,7 +314,16 @@ contract Loans {
 
     // TODO: can be called on Started or Claimed loan
     // если заемщик долго не возвращает займ, то любой лендер имеет право вызвать этот метод и выставить залог на аукцион
+
+    /** 
+     * @notice If loan hasn't been paid on time, this function can be called 
+     * by any lender to liquidate collateral by placing a sell NFT order on auction.
+     */
     function liquidateCollateral(uint256 loanId) loanExists(loanId) onlyLender(loanId) external {
+        Loan storage loan = _loans[loanId];
+        // TODO: ...
+        // require(loan.status == LoanStatus.Liquidated || loan.status == LoanStatus.Returned, "ILLEGAL_LOAN_STATUS");
+
         // require now-start>=maxperiod
         // require not returned
         // auction.createdAuction(startBid=amount)
