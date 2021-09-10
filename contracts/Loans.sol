@@ -38,11 +38,10 @@ contract Loans {
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    /* знаменатель дроби для ставки */
+    /** @notice Denominator of interested rate. */
     uint256 constant public LOAN_ANNUAL_RATE_DENOMINATOR = 10000;
 
-
-    /* предложение дать займ под залог создано */ 
+    /** @notice A new loan proposal created. */
     event LoanProposalCreated(
         uint256 indexed loanId,
         address creator,
@@ -53,7 +52,7 @@ contract Loans {
         uint40 maxPeriod
     );
 
-    /* предложение дать займ под залог отменено */ 
+    /** @notice Loan proposal cancelled. */
     event LoanProposalCanceled(
         uint256 indexed loanId
     );
@@ -103,13 +102,13 @@ contract Loans {
         uint256 amount
     );
 
-    /* реестр всех займов */
+    /** @notice List of loans. */
     mapping (uint256 /*loanId*/ => Loan) internal _loans;
-    /* генератор идентификаторов */
+    /** @dev Loan id generator. */
     uint256 internal _nextLoanId;
-    /* платежный токен которым производятся все выплаты (например USDT) */
+    /** @notice A token used for payments, e.g. USDC. */
     IERC20 public immutable payableToken;
-    /* контракт аукциона на который будет выставлен залог если заемщик вовремя не вернет долг */
+    /** @notice Auction contract used to liquidate NFT collateral of expired loans. */
     IAuction public immutable auction;
     
     /** @notice Reverts if loan doesn't exist. */
@@ -130,7 +129,7 @@ contract Loans {
         _;
     }
 
-    /* получить инфу по займу (до выдачи / после выдачи / отмененному / ликвидированному итп) */
+    /** @notice Returns loan. */
     function getLoan(uint256 loanId) loanExists(loanId) external view returns(
         address creator,
         address nft,
@@ -147,8 +146,7 @@ contract Loans {
             loan.startTimestamp, loan.finishTimestamp, loan.maxPeriod);
     }
 
-    
-    /* список всех заемщиков */
+    /** @notice Return loan's lenders who has been yet claimed his loan back. */
     function getLoanLenders(uint256 loanId) loanExists(loanId) external view returns(address[] memory) {
         EnumerableSet.AddressSet storage lendersMap = _loans[loanId].lenders;
         address[] memory lenders = new address[](lendersMap.length());
@@ -158,7 +156,7 @@ contract Loans {
         return lenders;
     }
 
-    /* размер займа заемщика */
+    /** @notice Amount of lender's loan for not finished loan. */
     function getLoanLenderAmount(uint256 loanId, address lender) loanExists(loanId) external view returns(uint256) {
         return _loans[loanId].lenderLoans[lender];
     }
@@ -168,7 +166,7 @@ contract Loans {
         return _loans[loanId].status;
     }
 
-    /* размер займа с процентом */
+    /** @notice Calculates loan amount with interest. */
     function calcAmountWithInterest(uint256 amount, uint32 rateNumerator) public pure returns(uint256 share) {
         return amount + amount * rateNumerator / LOAN_ANNUAL_RATE_DENOMINATOR;
     }
