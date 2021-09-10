@@ -5,11 +5,18 @@ import {IERC721} from '@openzeppelin/contracts/token/ERC721/IERC721.sol';
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {Auction} from './Auction.sol';
 
 
-// todo: обсудить возможность авто-отмены LoanProposalParticipationAccepted после какого-то времени (но тут все равно lender должен дернуть метод) так просто не получится
-// todo: обсудить как будет задаваться minBid для аукциона для истекших займов, у Дмитрия было предложение = 10% * amount, проблема тут в том а что если цены нфт упадет в 100 раз? тогда нфт никто никогда не купит за 0.1 первоначальной цены. Должен быть механизм.
+interface IAuction {
+    /** @notice Returns a token address used in auction. */
+    function payableToken() external returns(address);
+
+    /** @notice Creates new auction. */
+    function createAuction(address nft, uint256 nftId, uint256 startPrice) external;
+
+    /** @notice Returns auction win price or 0 if auction isn't finished. */
+    function getAuctionWinPrice(address nft, uint256 nftId) external returns(uint256 winPrice);
+}
 
 enum LoanStatus { Proposed, Cancelled, Started, Liquidating, Liquidated, Returned }
 
@@ -26,7 +33,6 @@ struct Loan {
     uint40 finishTimestamp; // time when loan is either cancelled, liquidated, or returned
     uint40 maxPeriod; // time in seconds given to creator to return a loan with interest
 }
-
 
 contract Loans {
     using SafeERC20 for IERC20;
@@ -70,6 +76,20 @@ contract Loans {
         uint256 indexed loanId
     );
 
+    /** @notice Loan's NFT collateral is placed on auction for liquidation. */
+    event LoanLiquidationStarted(
+        uint256 indexed loanId,
+        address indexed nft,
+        uint256 indexed nftId,
+        uint256 minPrice
+    );
+
+    /** @notice Loan has been liquidated on auction. */
+    event LoanLiquidated(
+        uint256 indexed loanId,
+        uint256 liquidationPrice
+    );
+
     /** @notice Loan's author returned tokens with interest and received NFT collateral back. */
     event LoanReturned(
         uint256 indexed loanId,
@@ -90,7 +110,7 @@ contract Loans {
     /* платежный токен которым производятся все выплаты (например USDT) */
     IERC20 public immutable payableToken;
     /* контракт аукциона на который будет выставлен залог если заемщик вовремя не вернет долг */
-    Auction public immutable auction;
+    IAuction public immutable auction;
     
     /** @notice Reverts if loan doesn't exist. */
     modifier loanExists(uint256 id) {
@@ -159,9 +179,12 @@ contract Loans {
     ) {
         require(_payableToken != address(0), "ZERO_ADDRESS");
         require(_auction != address(0), "ZERO_ADDRESS");
+    
+        IAuction iauction = IAuction(_auction);
+        require(iauction.payableToken() == _payableToken, "TOKENS_DONT_MATCH");
+        auction = iauction; // TODO: is there a better solution to read from contract in constructor?
 
         payableToken = IERC20(_payableToken);
-        auction = Auction(_auction);
     }
 
 
@@ -312,27 +335,46 @@ contract Loans {
         emit LoanedReturnClaimed(loanId, msg.sender, returnAmount);
     }
 
-    // TODO: can be called on Started or Claimed loan
-    // если заемщик долго не возвращает займ, то любой лендер имеет право вызвать этот метод и выставить залог на аукцион
-
     /** 
      * @notice If loan hasn't been paid on time, this function can be called 
      * by any lender to liquidate collateral by placing a sell NFT order on auction.
      */
     function liquidateCollateral(uint256 loanId) loanExists(loanId) onlyLender(loanId) external {
         Loan storage loan = _loans[loanId];
-        // TODO: ...
-        // require(loan.status == LoanStatus.Liquidated || loan.status == LoanStatus.Returned, "ILLEGAL_LOAN_STATUS");
+        require(loan.status == LoanStatus.Started, "ILLEGAL_LOAN_STATUS");
+        require(block.timestamp > loan.startTimestamp + loan.maxPeriod, "LOAN_NOT_EXPIRED");
 
-        // require now-start>=maxperiod
-        // require not returned
-        // auction.createdAuction(startBid=amount)
-        // TODO: implement
+        address nft = loan.nft;
+        uint256 nftId = loan.nftId;
+        uint256 minPrice = calcAmountWithInterest(loan.amount, loan.rateNumerator);
+        auction.createAuction(nft, nftId, minPrice);
+
+        loan.status = LoanStatus.Liquidating;
+        emit LoanLiquidationStarted(loanId, nft, nftId, minPrice);
     }
 
-    // поскольку оунером аукциона будет сам контракт, нам нужен метод чтобы проксировать claim на выйгранный аукцион
-    function claimAuction(uint256 loanId) public {
-        // TODO: implement
+    /** 
+     * @notice Called on liquidating loan to check if NFT has been sold.
+     * 
+     * Can be called by anyone. A caller is rewarded by extra profit above required price.
+     */
+    function claimAuction(uint256 loanId) loanExists(loanId) external {
+        Loan storage loan = _loans[loanId];
+        require(loan.status == LoanStatus.Liquidating, "ILLEGAL_LOAN_STATUS");
+
+        uint256 liquidationPrice = auction.getAuctionWinPrice(loan.nft, loan.nftId);
+        if (liquidationPrice > 0) {
+            // NFT has been sold, contract has tokens
+            loan.status = LoanStatus.Liquidated;
+            loan.finishTimestamp = uint40(block.timestamp);
+
+            // send extra tokens to liquidator
+            uint256 extraReward = liquidationPrice - loan.amount;
+            if (extraReward > 0) {
+                payableToken.transfer(msg.sender, extraReward);
+            }
+            emit LoanLiquidated(loanId, liquidationPrice);
+        }
     }
 
 
