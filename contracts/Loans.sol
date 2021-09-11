@@ -6,16 +6,20 @@ import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-
+// TODO: auction need some kind of IDs to sell and check same NFT multiple times
 interface IAuction {
     /** @notice Returns a token address used in auction. */
     function payableToken() external returns(address);
 
     /** @notice Creates new auction. */
-    function createAuction(address nft, uint256 nftId, uint256 startPrice) external;
+    function createAuction(address nft, uint256 nftId, uint256 startPrice) external returns(uint256 id);
 
+    // TODO: remove
     /** @notice Returns auction win price or 0 if auction isn't finished. */
     function getAuctionWinPrice(address nft, uint256 nftId) external returns(uint256 winPrice);
+    
+    /** @notice Returns auction win price or 0 if auction isn't finished. */
+    function getAuctionWinPrice(uint256 id) external view returns(uint256 winPrice);
 }
 
 enum LoanStatus { Proposed, Cancelled, Started, Liquidating, Liquidated, Returned }
