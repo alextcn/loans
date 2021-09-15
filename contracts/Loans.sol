@@ -6,17 +6,13 @@ import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-// TODO: auction need some kind of IDs to sell and check same NFT multiple times
+
 interface IAuction {
     /** @notice Returns a token address used in auction. */
     function payableToken() external returns(address);
 
     /** @notice Creates new auction. */
     function createAuction(address nft, uint256 nftId, uint256 startPrice) external returns(uint256 id);
-
-    // TODO: remove
-    /** @notice Returns auction win price or 0 if auction isn't finished. */
-    function getAuctionWinPrice(address nft, uint256 nftId) external returns(uint256 winPrice);
     
     /** @notice Returns auction win price or 0 if auction isn't finished. */
     function getAuctionWinPrice(uint256 id) external view returns(uint256 winPrice);
@@ -36,6 +32,7 @@ struct Loan {
     uint40 startTimestamp;  // time when loan's author claimed loan amount provided by lenders
     uint40 finishTimestamp; // time when loan is either cancelled, liquidated, or returned
     uint40 maxPeriod; // time in seconds given to creator to return a loan with interest
+    uint256 auctionId;
 }
 
 contract Loans {
@@ -84,6 +81,7 @@ contract Loans {
         uint256 indexed loanId,
         address indexed nft,
         uint256 indexed nftId,
+        uint256 auctionId,
         uint256 minPrice
     );
 
@@ -349,10 +347,11 @@ contract Loans {
         address nft = loan.nft;
         uint256 nftId = loan.nftId;
         uint256 minPrice = calcAmountWithInterest(loan.amount, loan.rateNumerator);
-        auction.createAuction(nft, nftId, minPrice);
+        uint256 auctionId = auction.createAuction(nft, nftId, minPrice);
 
         loan.status = LoanStatus.Liquidating;
-        emit LoanLiquidationStarted(loanId, nft, nftId, minPrice);
+        loan.auctionId = auctionId;
+        emit LoanLiquidationStarted(loanId, nft, nftId, auctionId, minPrice);
     }
 
     /** 
@@ -364,7 +363,7 @@ contract Loans {
         Loan storage loan = _loans[loanId];
         require(loan.status == LoanStatus.Liquidating, "ILLEGAL_LOAN_STATUS");
 
-        uint256 liquidationPrice = auction.getAuctionWinPrice(loan.nft, loan.nftId);
+        uint256 liquidationPrice = auction.getAuctionWinPrice(loan.auctionId);
         if (liquidationPrice > 0) {
             // NFT has been sold, contract has tokens
             loan.status = LoanStatus.Liquidated;

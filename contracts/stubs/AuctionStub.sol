@@ -47,14 +47,6 @@ contract AuctionStub is IAuction {
 
         IERC721(nft).transferFrom(msg.sender, address(this), nftId);
     }
-
-    /** @notice Returns auction win price or 0 if auction isn't finished. */
-    function getAuctionWinPrice(address nft, uint256 nftId) external override returns(uint256 winPrice) {
-        revert("NOT IMPLEMENTED");
-        // AuctionItem storage item = _items[id];
-        // require(item.owner != address(0), "AUCTION_NOT_EXISTS");
-        // TODO:
-    }
     
     /** @notice Returns auction win price or 0 if auction isn't finished. */
     function getAuctionWinPrice(uint256 id) external view override returns(uint256 winPrice) {
