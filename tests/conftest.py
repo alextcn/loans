@@ -1,8 +1,17 @@
 import time
+from enum import Enum
 
 import pytest
 from brownie import accounts, XToken, MatrixNFT, AuctionStub, Loans
 
+
+class LoanStatus(Enum):
+    Proposed = 0
+    Cancelled = 1
+    Started = 2
+    Liquidating = 3
+    Liquidated = 4
+    Returned = 5
 
 @pytest.fixture
 def x_token(accounts):
@@ -19,12 +28,12 @@ def matrix_nft(accounts):
 
 
 @pytest.fixture
-def auction_stub(accounts, x_token):
+def auction(accounts, x_token):
     contract = AuctionStub.deploy(x_token.address, {'from': accounts[0]})
     return contract
 
 
 @pytest.fixture
-def loans(accounts, x_token, auction_stub):
-    contract = Loans.deploy(x_token.address, auction_stub.address, {'from': accounts[0]})
+def loans(accounts, x_token, auction):
+    contract = Loans.deploy(x_token.address, auction.address, {'from': accounts[0]})
     return contract
