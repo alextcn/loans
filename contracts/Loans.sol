@@ -347,6 +347,8 @@ contract Loans {
         address nft = loan.nft;
         uint256 nftId = loan.nftId;
         uint256 minPrice = calcAmountWithInterest(loan.amount, loan.rateNumerator);
+
+        IERC721(loan.nft).approve(address(auction), loan.nftId);
         uint256 auctionId = auction.createAuction(nft, nftId, minPrice);
 
         loan.status = LoanStatus.Liquidating;
@@ -364,18 +366,19 @@ contract Loans {
         require(loan.status == LoanStatus.Liquidating, "ILLEGAL_LOAN_STATUS");
 
         uint256 liquidationPrice = auction.getAuctionWinPrice(loan.auctionId);
-        if (liquidationPrice > 0) {
-            // NFT has been sold, contract has tokens
-            loan.status = LoanStatus.Liquidated;
-            loan.finishTimestamp = uint40(block.timestamp);
+        require(liquidationPrice > 0, "AUCTION_NOT_FINISHED");
+        
+        // NFT has been sold, contract has tokens
+        loan.status = LoanStatus.Liquidated;
+        loan.finishTimestamp = uint40(block.timestamp);
 
-            // send extra tokens to liquidator
-            uint256 extraReward = liquidationPrice - loan.amount;
-            if (extraReward > 0) {
-                payableToken.transfer(msg.sender, extraReward);
-            }
-            emit LoanLiquidated(loanId, liquidationPrice);
+        // send extra tokens to liquidator
+        uint256 loanWithInterest = calcAmountWithInterest(loan.amount, loan.rateNumerator);
+        uint256 extraReward = liquidationPrice - loanWithInterest;
+        if (extraReward > 0) {
+            payableToken.transfer(msg.sender, extraReward);
         }
+        emit LoanLiquidated(loanId, liquidationPrice);
     }
 
 

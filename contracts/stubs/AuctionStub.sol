@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity 0.8.6;
 
+import {IERC721} from '@openzeppelin/contracts/token/ERC721/IERC721.sol';
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import "../Loans.sol";
 
 
@@ -15,6 +17,8 @@ struct AuctionItem {
 }
 
 contract AuctionStub is IAuction {
+    using SafeERC20 for IERC20;
+
     IERC20 public immutable token;
 
     mapping (uint256 /*id*/ => AuctionItem) internal _items;
@@ -61,9 +65,10 @@ contract AuctionStub is IAuction {
         AuctionItem storage item = _items[id];
         require(item.owner != address(0), "AUCTION_NOT_EXISTS");
         require(item.winPrice == 0, "AUCTION_FINISHED");
-        require(item.owner == msg.sender, "NOT_AN_OWNER");
 
         item.winPrice = finalPrice;
+
+        token.safeTransferFrom(msg.sender, item.owner, finalPrice);
         IERC721(item.nft).transferFrom(address(this), msg.sender, item.nftId);
     }
 }
